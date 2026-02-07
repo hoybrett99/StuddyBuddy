@@ -84,9 +84,9 @@ class DocumentChunk(BaseModel):
     chunk_id: str
     document_id: str
     text: str
-    chunk_index: str
-    start_char: str # where in original document this chunk starts
-    end_char: str
+    chunk_index: int
+    start_char: int # where in original document this chunk starts
+    end_char: int
     embedding: Optional[List[float]] = None
     metadata: DocumentMetaData
 
