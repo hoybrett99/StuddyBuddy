@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     gemini_max_tokens: int = 8192
 
     claude_model: str = "claude-sonnet-4-20250514"
-    gemini_max_tokens: int = 8192
+    claude_max_tokens: int = 8192
     
     model_config = {
         "env_file": ".env",

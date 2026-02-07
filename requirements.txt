@@ -8,6 +8,8 @@ pydantic
 pydantic-settings
 # ^ pydantic-settings for configuration management
 
+anthropic
+
 # LLM & AI
 google-generativeai
 # ^ Official Google Gemini SDK
