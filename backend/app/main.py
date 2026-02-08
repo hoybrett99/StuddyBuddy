@@ -6,6 +6,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import time
 from pathlib import Path
+import traceback
+import sys
 
 from app.models import (
     UploadResponse,
@@ -14,7 +16,7 @@ from app.models import (
     ErrorResponse,
     SystemStats,
     FileType,
-    DocumentMetadata
+    DocumentMetaData
 )
 from app.config import Settings, get_settings
 from app.services.document_services import DocumentService
@@ -61,6 +63,7 @@ async def upload_document(
     doc_service: DocumentService = Depends(get_document_service),
     emb_service: EmbeddingService = Depends(get_embedding_service),
     rag_service: RAGService = Depends(get_rag_service),
+    settings: Settings = Depends(get_settings)
 ):
     """
     Upload and process a document.
@@ -74,7 +77,7 @@ async def upload_document(
         # Validate file type
         file_extension = Path(file.filename).suffix[1:].lower()
 
-        if file_extension not in Settings.allowed_file_type:
+        if file_extension not in settings.allowed_file_types:
             raise HTTPException(
                 status_code=400,
                 detail=f"File type .{file_extension} not supported"
@@ -87,23 +90,23 @@ async def upload_document(
 
         # Check file size
         file_size = len(content)
-        max_size = Settings.max_file_size_mb * 1024 * 1024
+        max_size = settings.max_file_size_mb * 1024 * 1024
 
         if file_size > max_size:
             raise HTTPException(
                 status_code=400,
-                detail=f"File is curerntly {file_size}. Max size: {Settings.max_file_size_mb}MB."
+                detail=f"File is currently {file_size} bytes. Max size: {settings.max_file_size_mb}MB."
             )
         
         # Save file
         file_path = await doc_service.save_file(file.filename, content)
 
         # Extract text
-        text = doc_service.text_extraction(file_path, file_type)
+        text = doc_service.extract_text(file_path, file_type)
 
         # Create metadata
         document_id = file_path.stem # filename without extension
-        metadata = DocumentMetadata(
+        metadata = DocumentMetaData(
             filename=file.filename,
             file_type=file_type,
             file_size_bytes=file_size
@@ -113,7 +116,7 @@ async def upload_document(
         chunks = doc_service.create_chunks(text, document_id, metadata)
 
         # Generate embeddings
-        chunks_with_embeddings = emb_service.embed_texts(chunks)
+        chunks_with_embeddings = await emb_service.embed_chunks(chunks)
 
         # Store in chromaDB
         await rag_service.store_chunks(chunks_with_embeddings)
@@ -131,19 +134,33 @@ async def upload_document(
         )
     
     except HTTPException:
-        # Re-raise HTTP exceptions
-        raise
+            raise
 
     except Exception as e:
-        # Catch all other errors
+        # Print full traceback to console
+        print("\n" + "="*80)
+        print("ERROR IN UPLOAD:")
+        print("="*80)
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        print("\nFull traceback:")
+        traceback.print_exc(file=sys.stdout)
+        print("="*80 + "\n")
+        
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing document: {str(e)}"
+            detail=f"Error processing document: {type(e).__name__}: {str(e)}"
         )
-    
+
+@app.post(
+    "/query",
+    response_model=QueryResponse,
+    summary="Ask a question",
+    description="Query the RAG system with a question"
+)
 async def query(
         request: QueryRequest,
-        rag_service: RAGService= Depends(get_rag_service)
+        rag_service: RAGService = Depends(get_rag_service)
 ):
     """
     Ask a question about uploaded documents.
@@ -159,17 +176,17 @@ async def query(
     try:
         # Get answer from RAG service
         answer, sources = await rag_service.query(
-            question = request.question,
-            num_contexts = request.num_contexts,
-            document_ids = request.document_ids
+            question=request.question,
+            num_contexts=request.num_contexts,
+            document_ids=request.document_ids
         )
 
         query_time = time.time() - start_time
 
         return QueryResponse(
-            answer = answer,
-            sources = sources,
-            query_time_seconds = round(query_time, 2) 
+            answer=answer,
+            sources=sources,
+            query_time_seconds=round(query_time, 2) 
         )
 
     except Exception as e:

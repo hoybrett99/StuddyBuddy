@@ -40,7 +40,7 @@ class Settings(BaseSettings):
 
     # File upload settings
     max_file_size_mb: int = 50
-    allowed_file_type: List[str] = ["pdf", "txt", "docx"]
+    allowed_file_types: List[str] = ["pdf", "txt", "docx"]
     upload_dir: str = "/app/uploads"
 
     # ChromaDB settings

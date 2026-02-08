@@ -55,28 +55,28 @@ class DocumentService:
 
                         return file_path
     
-    def text_extraction(self, file_path: Path, file_type: FileType) -> str:
-            """
-            Extract text from a document.
+    def extract_text(self, file_path: Path, file_type: FileType) -> str:
+        """
+        Extract text from a document.
+        
+        Args:
+            file_path: Path to the file
+            file_type: Type of file (PDF, TXT, DOCX)
             
-            Args:
-                file_path: Path to the file
-                file_type: Type of file (PDF, TXT, DOCX)
-                
-            Returns:
-                str: Extracted text
-                
-            Raises:
-                ValueError: If file type not supported
-            """
-            if file_type == FileType.PDF:
-                   return self._extract_pdf(file_path)
-            elif file_type == FileType.TXT:
-                return self._extract_txt(file_path)
-            elif file_type == FileType.DOCX:
-                return self._extract_docx(file_path)
-            else:
-                raise ValueError(f"Unsupported file type: {file_type}")
+        Returns:
+            str: Extracted text
+            
+        Raises:
+            ValueError: If file type not supported
+        """
+        if file_type == FileType.PDF:
+            return self._extract_pdf(file_path)
+        elif file_type == FileType.TXT:
+            return self._extract_txt(file_path)
+        elif file_type == FileType.DOCX:
+            return self._extract_docx(file_path)
+        else:
+            raise ValueError(f"Unsupported file type: {file_type}")
         
     def _extract_pdf(self, file_path: Path) -> str:
         """

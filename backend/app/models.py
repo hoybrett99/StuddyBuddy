@@ -69,6 +69,7 @@ class Source(BaseModel):
     document_name: str
     chunk_id: str
     relevance_score: float = Field(ge=0.0, le=1.0)
+    chunk_text: str = ""
 
 class QueryResponse(BaseModel):
     """

@@ -241,7 +241,8 @@ class RAGService:
             source = Source(
                 document_name=chunk_info["filename"],
                 chunk_id=chunk_info['chunk_id'],
-                relevance_score=round(chunk_info['similarity'], 3)
+                relevance_score=round(chunk_info['similarity'], 3),
+                chunk_text=chunk_info['text'] 
             )
             sources.append(source)
 
