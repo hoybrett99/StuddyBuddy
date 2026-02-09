@@ -39,7 +39,11 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # File upload settings
-    max_file_size_mb: int = 50
+    max_file_size_bytes: int = Field(
+        default=50 * 1024 * 1024,
+        description="Maximum file size in bytes"
+    )
+
     allowed_file_types: List[str] = ["pdf", "txt", "docx"]
     upload_dir: str = "/app/uploads"
 

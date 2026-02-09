@@ -4,6 +4,8 @@ import streamlit as st
 import requests
 from datetime import datetime
 import time
+import pandas as pd
+from datetime import datetime
 
 # ============================================================================
 # Configuration
@@ -396,14 +398,14 @@ with tab3:
 # ============================================================================
 
 with tab4:
-    st.markdown("### 🔍 Preview Document Extraction")
-    st.info("📋 Upload a document to see the extracted text. Useful for checking PDF quality before processing.")
+    st.markdown("### 🔍 Preview Document Extraction & Chunking")
+    st.info("📋 Upload a document to see the extracted text and how it will be chunked for RAG processing.")
     
     preview_file = st.file_uploader(
         "Choose a file to preview",
         type=['pdf', 'txt', 'docx'],
         key="preview_uploader",
-        help="Upload a file to see how text is extracted"
+        help="Upload a file to see how text is extracted and chunked"
     )
     
     if preview_file is not None:
@@ -414,10 +416,10 @@ with tab4:
             st.write(f"**📦 Size:** {preview_file.size / 1024:.2f} KB")
         
         with col2:
-            preview_button = st.button("🔍 Extract Text", type="primary", use_container_width=True)
+            preview_button = st.button("🔍 Extract & Chunk", type="primary", use_container_width=True)
         
         if preview_button:
-            with st.spinner("Extracting text from document..."):
+            with st.spinner("Extracting and chunking document..."):
                 try:
                     # Reset file pointer
                     preview_file.seek(0)
@@ -429,7 +431,7 @@ with tab4:
                     if response.status_code == 200:
                         result = response.json()
                         
-                        # Display stats
+                        # Display extraction stats
                         st.markdown("---")
                         st.markdown("### 📊 Extraction Statistics")
                         
@@ -443,6 +445,22 @@ with tab4:
                         with col4:
                             st.metric("File Type", result['file_type'].upper())
                         
+                        # Display chunking stats
+                        st.markdown("---")
+                        st.markdown("### 🧩 Chunking Statistics")
+                        
+                        chunk_stats = result['chunk_stats']
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("Total Chunks", chunk_stats['total_chunks'])
+                        with col2:
+                            st.metric("Avg Size", f"{chunk_stats['avg_chunk_size']:.0f} chars")
+                        with col3:
+                            st.metric("Min Size", f"{chunk_stats['min_chunk_size']} chars")
+                        with col4:
+                            st.metric("Max Size", f"{chunk_stats['max_chunk_size']} chars")
+                        
                         # Quality check
                         st.markdown("---")
                         st.markdown("### ✅ Quality Check")
@@ -455,79 +473,98 @@ with tab4:
                         # Check for common OCR issues
                         single_letters = len([w for w in text.split() if len(w) == 1 and w.isupper() and w not in ['A', 'I']])
                         if single_letters > 50:
-                            quality_issues.append(f"⚠️ {single_letters} stray single capital letters detected (possible OCR errors)")
+                            quality_issues.append(f"⚠️ {single_letters} stray single capital letters detected")
                         
                         consonant_clusters = len(re.findall(r'[bcdfghjklmnpqrstvwxyz]{6,}', text.lower()))
                         if consonant_clusters > 20:
-                            quality_issues.append(f"⚠️ {consonant_clusters} unusual consonant clusters (possible gibberish)")
+                            quality_issues.append(f"⚠️ {consonant_clusters} unusual consonant clusters")
                         
                         excessive_spaces = len(re.findall(r'\s{4,}', text))
                         if excessive_spaces > 10:
                             quality_issues.append(f"⚠️ {excessive_spaces} instances of excessive spacing")
                         
-                        non_ascii = len([c for c in text if ord(c) > 127])
-                        non_ascii_percent = (non_ascii / len(text) * 100) if text else 0
-                        if non_ascii_percent > 10:
-                            quality_issues.append(f"⚠️ {non_ascii_percent:.1f}% non-ASCII characters")
+                        # Check chunking quality
+                        chunks = result['chunks']
+                        very_small_chunks = sum(1 for c in chunks if c['length'] < 200)
+                        very_large_chunks = sum(1 for c in chunks if c['length'] > 1500)
+                        
+                        if very_small_chunks > len(chunks) * 0.2:
+                            quality_issues.append(f"⚠️ {very_small_chunks} very small chunks (< 200 chars)")
+                        
+                        if very_large_chunks > 0:
+                            quality_issues.append(f"⚠️ {very_large_chunks} very large chunks (> 1500 chars)")
                         
                         if quality_issues:
                             for issue in quality_issues:
                                 st.warning(issue)
-                            st.info("💡 **Tip:** Try using `pdfplumber` instead of `pypdf` for better extraction quality.")
                         else:
-                            st.success("✅ Text extraction looks clean! No major issues detected.")
+                            st.success("✅ Text extraction and chunking look good!")
                         
-                        # Display extracted text in tabs
+                        # Display chunks
                         st.markdown("---")
-                        st.markdown("### 📄 Extracted Text")
-
-                        text_tab1, text_tab2, text_tab3 = st.tabs([
-                            "📖 First 500 chars", 
-                            "📖 Last 500 chars", 
-                            "📄 Full Text"
+                        st.markdown("### 📦 Chunk Preview")
+                        
+                        # Create tabs for different views
+                        chunk_tab1, chunk_tab2, chunk_tab3 = st.tabs([
+                            f"📚 All Chunks ({len(chunks)})",
+                            "📄 Full Text",
+                            "📊 Chunk Analysis"
                         ])
-
-                        with text_tab1:
-                            st.caption("Preview of the beginning of the document")
-                            st.text_area(
-                                "First 500 characters",
-                                value=result['preview_first_500'],
-                                height=300,
-                                label_visibility="collapsed",
-                                key="preview_first_500_area"
-                            )
-
-                        with text_tab2:
-                            st.caption("Preview of the end of the document")
-                            if result['preview_last_500']:
-                                st.text_area(
-                                    "Last 500 characters",
-                                    value=result['preview_last_500'],
-                                    height=300,
-                                    label_visibility="collapsed",
-                                    key="preview_last_500_area"
-                                )
-                            else:
-                                st.info("Document is less than 500 characters")
-
-                        with text_tab3:
-                            st.caption(f"Complete extracted text - {len(result['full_text']):,} characters")
+                        
+                        with chunk_tab1:
+                            st.caption(f"Showing how the document will be split into {len(chunks)} chunks for RAG processing")
+                            
+                            # Add chunk size filter
+                            show_all = st.checkbox("Show all chunks", value=False)
+                            
+                            chunks_to_show = chunks if show_all else chunks[:10]
+                            
+                            if not show_all and len(chunks) > 10:
+                                st.info(f"Showing first 10 of {len(chunks)} chunks. Check 'Show all chunks' to see everything.")
+                            
+                            # Display each chunk
+                            for i, chunk in enumerate(chunks_to_show, 1):
+                                with st.expander(
+                                    f"📦 Chunk {chunk['chunk_index'] + 1} - {chunk['length']} chars, {chunk['word_count']} words",
+                                    expanded=(i <= 3)  # First 3 chunks expanded
+                                ):
+                                    # Chunk metadata
+                                    col1, col2, col3 = st.columns(3)
+                                    with col1:
+                                        st.caption(f"**Index:** {chunk['chunk_index']}")
+                                    with col2:
+                                        st.caption(f"**Characters:** {chunk['length']}")
+                                    with col3:
+                                        st.caption(f"**Words:** {chunk['word_count']}")
+                                    
+                                    # Chunk content
+                                    st.markdown("**Content:**")
+                                    st.text_area(
+                                        "Chunk text:",
+                                        value=chunk['text'],
+                                        height=200,
+                                        label_visibility="collapsed",
+                                        disabled=True,
+                                        key=f"chunk_{chunk['chunk_id']}"
+                                    )
+                                    
+                                    # Show where chunk starts
+                                    st.caption(f"**Starts with:** {chunk['first_line'][:100]}...")
+                        
+                        with chunk_tab2:
+                            st.caption("Complete extracted text")
                             
                             # Add search functionality
                             search_term = st.text_input(
-                                "🔍 Search in text (optional):", 
-                                key="search_preview",
+                                "🔍 Search in text:", 
+                                key="search_preview_full",
                                 placeholder="Enter text to search..."
                             )
                             
                             if search_term:
-                                # Count occurrences
                                 count = result['full_text'].lower().count(search_term.lower())
-                                st.caption(f"Found {count} occurrence(s) of '{search_term}'")
+                                st.success(f"✨ Found **{count}** occurrence(s)")
                                 
-                                # Highlight search term
-                                import re
-                                # Case-insensitive replacement with markers
                                 highlighted_text = re.sub(
                                     f'({re.escape(search_term)})',
                                     r'>>> \1 <<<',
@@ -535,20 +572,124 @@ with tab4:
                                     flags=re.IGNORECASE
                                 )
                                 st.text_area(
-                                    "Full text with search results",
+                                    "Content:",
                                     value=highlighted_text,
                                     height=500,
                                     label_visibility="collapsed",
-                                    key="preview_full_highlighted"
+                                    disabled=True,
+                                    key="preview_full_search"
                                 )
                             else:
                                 st.text_area(
-                                    "Full text",
+                                    "Content:",
                                     value=result['full_text'],
                                     height=500,
                                     label_visibility="collapsed",
-                                    key="preview_full_text_area"
+                                    disabled=True,
+                                    key="preview_full"
                                 )
+                        
+                        with chunk_tab3:
+                            st.caption("Analysis of chunk distribution and quality")
+                            
+                            # Chunk size distribution
+                            st.markdown("**Chunk Size Distribution:**")
+                            
+                            chunk_sizes = [c['length'] for c in chunks]
+                            
+                            # Create a simple histogram using metrics
+                            size_ranges = [
+                                ("0-200", sum(1 for s in chunk_sizes if s < 200)),
+                                ("200-400", sum(1 for s in chunk_sizes if 200 <= s < 400)),
+                                ("400-600", sum(1 for s in chunk_sizes if 400 <= s < 600)),
+                                ("600-800", sum(1 for s in chunk_sizes if 600 <= s < 800)),
+                                ("800-1000", sum(1 for s in chunk_sizes if 800 <= s < 1000)),
+                                ("1000+", sum(1 for s in chunk_sizes if s >= 1000)),
+                            ]
+                            
+                            cols = st.columns(6)
+                            for col, (range_label, count) in zip(cols, size_ranges):
+                                with col:
+                                    st.metric(f"{range_label} chars", count)
+                            
+                            st.markdown("---")
+                            
+                            # Chunk details table
+                            st.markdown("**Chunk Details:**")
+                            
+                            chunk_data = []
+                            for chunk in chunks[:20]:  # First 20 chunks
+                                chunk_data.append({
+                                    "Index": chunk['chunk_index'] + 1,
+                                    "Characters": chunk['length'],
+                                    "Words": chunk['word_count'],
+                                    "First Line": chunk['first_line'][:50] + "..." if len(chunk['first_line']) > 50 else chunk['first_line']
+                                })
+                            
+                            import pandas as pd
+                            df = pd.DataFrame(chunk_data)
+                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            
+                            if len(chunks) > 20:
+                                st.caption(f"Showing first 20 of {len(chunks)} chunks")
+                        
+                        # Download options
+                        st.markdown("---")
+                        st.markdown("### 💾 Export Options")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.download_button(
+                                label="📄 Download Full Text",
+                                data=result['full_text'],
+                                file_name=f"{preview_file.name}_extracted.txt",
+                                mime="text/plain",
+                                use_container_width=True
+                            )
+                        
+                        with col2:
+                            # Create chunked text file
+                            chunked_text = ""
+                            for i, chunk in enumerate(chunks, 1):
+                                chunked_text += f"\n{'='*80}\n"
+                                chunked_text += f"CHUNK {i}/{len(chunks)}\n"
+                                chunked_text += f"Characters: {chunk['length']} | Words: {chunk['word_count']}\n"
+                                chunked_text += f"{'='*80}\n\n"
+                                chunked_text += chunk['text']
+                                chunked_text += "\n\n"
+                            
+                            st.download_button(
+                                label="📦 Download Chunks",
+                                data=chunked_text,
+                                file_name=f"{preview_file.name}_chunks.txt",
+                                mime="text/plain",
+                                use_container_width=True
+                            )
+                        
+                        with col3:
+                            # Create JSON export
+                            import json
+                            json_export = {
+                                "filename": preview_file.name,
+                                "extracted_at": datetime.now().isoformat(),
+                                "statistics": {
+                                    "characters": result['extracted_length'],
+                                    "words": result['word_count'],
+                                    "lines": result['line_count'],
+                                    "chunks": len(chunks)
+                                },
+                                "chunk_stats": chunk_stats,
+                                "chunks": chunks
+                            }
+                            
+                            st.download_button(
+                                label="🔧 Download JSON",
+                                data=json.dumps(json_export, indent=2),
+                                file_name=f"{preview_file.name}_analysis.json",
+                                mime="application/json",
+                                use_container_width=True
+                            )
                         
                     else:
                         error_detail = response.json().get('detail', 'Unknown error')

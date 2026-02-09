@@ -176,37 +176,80 @@ class DocumentService:
         return "\n\n".join([para.text for para in doc.paragraphs])
         
     def create_chunks(
-              self,
-              text: str,
-              document_id: str,
-              metadata: DocumentMetaData
+        self,
+        text: str,
+        document_id: str,
+        metadata: dict
     ) -> List[DocumentChunk]:
-         """
-         Split texts into chunks
-
-         Returns:
-            List[DocumentChunk]: List of chunk objects
-         """
-         # Split text
-         text_chunks = self.text_splitter.split_text(text)
-
-         # curernt document chunks
-         chunks = []
-         current_pos = 0
-
-         for idx, chunk_text in enumerate(text_chunks):
-              chunk = DocumentChunk(
-                   chunk_id=f"{document_id}_chunk_{idx}",
-                   document_id=document_id,
-                   text=chunk_text,
-                   chunk_index=idx,
-                   start_char=current_pos,
-                   end_char=current_pos + len(chunk_text),
-                   metadata=metadata
-              )
-              chunks.append(chunk)
-              current_pos += len(chunk_text)
-         return chunks
+        """
+        Create optimized chunks for general PDFs.
+        
+        Optimizations:
+        - 800 char chunks (better than 1000 for dense content)
+        - Comprehensive separator list (preserves sentences)
+        - Position tracking (for debugging/analysis)
+        """
+        
+        # Configure splitter
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=800,
+            chunk_overlap=150,
+            length_function=len,
+            separators=[
+                "\n\n\n",  # Major breaks (3+ newlines)
+                "\n\n",    # Paragraph breaks
+                "\n",      # Line breaks
+                ". ",      # Sentence ends (period + space)
+                "! ",      # Exclamations
+                "? ",      # Questions
+                "; ",      # Semicolons
+                ": ",      # Colons
+                ", ",      # Commas
+                " ",       # Spaces
+                "",        # Characters (last resort)
+            ],
+            is_separator_regex=False,
+        )
+        
+        # Split text
+        raw_chunks = text_splitter.split_text(text)
+        
+        # Create chunks with metadata
+        chunks = []
+        current_pos = 0
+        
+        for i, chunk_text in enumerate(raw_chunks):
+            # Clean whitespace
+            cleaned = chunk_text.strip()
+            if not cleaned:
+                continue
+            
+            # Track position in original text
+            start_char = text.find(chunk_text, current_pos)
+            if start_char == -1:
+                start_char = current_pos
+            end_char = start_char + len(chunk_text)
+            
+            # Create chunk
+            chunk = DocumentChunk(
+                chunk_id=str(uuid.uuid4()),
+                document_id=document_id,
+                text=cleaned,
+                chunk_index=len(chunks),  # Use actual index (skipping empty chunks)
+                start_char=start_char,
+                end_char=end_char,
+                metadata={
+                    **metadata,
+                    "chunk_index": len(chunks),
+                    "total_chunks": len(raw_chunks),
+                    "chunk_size": len(cleaned),
+                }
+            )
+            chunks.append(chunk)
+            current_pos = end_char
+        
+        print(f"Created {len(chunks)} chunks (avg {sum(len(c.text) for c in chunks) / len(chunks):.0f} chars)")
+        return chunks
 
 if __name__ == "__main__":
     """

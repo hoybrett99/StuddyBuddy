@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
 
@@ -29,7 +29,7 @@ class UploadResponse(BaseModel):
     """
     What we send back to the user after they upload their files.
     """
-    success: bool
+    success: bool = True
     message: str
     chunks_created: int
     document_id: str
@@ -80,17 +80,15 @@ class QueryResponse(BaseModel):
     query_time_seconds: float
 
 class DocumentChunk(BaseModel):
-    """
-    A single chunk of texts from a document.
-    """
+    """A chunk of text from a document."""
     chunk_id: str
     document_id: str
     text: str
     chunk_index: int
-    start_char: int # where in original document this chunk starts
-    end_char: int
-    embedding: Optional[List[float]] = None
-    metadata: DocumentMetaData
+    start_char: Optional[int] = 0  # ← Make optional with default
+    end_char: Optional[int] = 0    # ← Make optional with default
+    metadata: Dict[str, Any] = Field(default_factory=dict)  # ← Make flexible
+    embedding: Optional[list] = None
 
 class ErrorResponse(BaseModel):
     """

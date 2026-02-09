@@ -9,6 +9,9 @@ import time
 from pathlib import Path
 import traceback
 import sys
+import re
+import uuid
+from datetime import datetime
 
 from app.models import (
     UploadResponse,
@@ -53,104 +56,89 @@ def get_rag_service() -> RAGService:
     return RAGService()
 
 # Route Handlers
-@app.post(
-    "/upload",
-    response_model=UploadResponse,
-    summary="Upload a document",
-    description="Upload a PDF, TXT, or DOCX file for processing"
-)
+@app.post("/upload", response_model=UploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
     doc_service: DocumentService = Depends(get_document_service),
-    emb_service: EmbeddingService = Depends(get_embedding_service),
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
     rag_service: RAGService = Depends(get_rag_service),
     settings: Settings = Depends(get_settings)
 ):
-    """
-    Upload and process a document.
-    
-    The function signature tells FastAPI:
-    - Expect a file upload
-    - Inject the services we need
-    - Return an UploadResponse
-    """
+    """Upload and process a document."""
     try:
-        # Validate file type
+        # Validate file
         file_extension = Path(file.filename).suffix[1:].lower()
-
+        
         if file_extension not in settings.allowed_file_types:
             raise HTTPException(
                 status_code=400,
-                detail=f"File type .{file_extension} not supported"
+                detail=f"File type not supported: {file_extension}"
             )
         
         file_type = FileType(file_extension)
-
-        # Read file content
+        
+        # Read and validate size
         content = await file.read()
-
-        # Check file size
         file_size = len(content)
-        max_size = settings.max_file_size_mb * 1024 * 1024
-
-        if file_size > max_size:
+        
+        if file_size > settings.max_file_size_bytes:
             raise HTTPException(
                 status_code=400,
-                detail=f"File is currently {file_size} bytes. Max size: {settings.max_file_size_mb}MB."
+                detail=f"File too large. Max size: {settings.max_file_size_bytes / (1024*1024)}MB"
             )
         
         # Save file
         file_path = await doc_service.save_file(file.filename, content)
-
+        print(f"Saved file to: {file_path}")
+        
         # Extract text
         text = doc_service.extract_text(file_path, file_type)
-
+        print(f"Extracted {len(text)} characters")
+        
+        # Generate document ID
+        document_id = str(uuid.uuid4())
+        
         # Create metadata
-        document_id = file_path.stem # filename without extension
-        metadata = DocumentMetaData(
-            filename=file.filename,
-            file_type=file_type,
-            file_size_bytes=file_size
-        )
-
+        metadata = {
+            "filename": file.filename,
+            "file_type": file_type.value,
+            "file_size_bytes": file_size,
+            "upload_timestamp": datetime.now().isoformat()
+        }
+        
         # Create chunks
-        chunks = doc_service.create_chunks(text, document_id, metadata)
-
-        # Generate embeddings
-        chunks_with_embeddings = await emb_service.embed_chunks(chunks)
-
-        # Store in chromaDB
-        await rag_service.store_chunks(chunks_with_embeddings)
-
-        # Updating metadata
-        metadata.total_chunks = len(chunks)
-
-        # return response
-        return UploadResponse(
-            success=True,
-            message="Document processed successfully",
-            filename=file.filename,
-            chunks_created=len(chunks),
+        chunks = doc_service.create_chunks(
+            text=text,
             document_id=document_id,
+            metadata=metadata
+        )
+        
+        print(f"Created {len(chunks)} chunks")
+        
+        # Embed chunks
+        chunks_with_embeddings = await embedding_service.embed_chunks(chunks)
+        print(f"Generated embeddings for {len(chunks_with_embeddings)} chunks")
+        
+        # Store in vector database
+        await rag_service.store_chunks(chunks_with_embeddings)
+        print(f"Stored {len(chunks_with_embeddings)} chunks in vector DB")
+        
+        return UploadResponse(
+            message="Document uploaded successfully",
+            document_id=document_id,
+            filename=file.filename,
+            chunks_created=len(chunks)
         )
     
     except HTTPException:
-            raise
-
+        raise
     except Exception as e:
-        # Print full traceback to console
-        print("\n" + "="*80)
-        print("ERROR IN UPLOAD:")
-        print("="*80)
-        print(f"Error type: {type(e).__name__}")
-        print(f"Error message: {str(e)}")
-        print("\nFull traceback:")
-        traceback.print_exc(file=sys.stdout)
-        print("="*80 + "\n")
-        
+        import traceback
+        print(f"Error uploading document: {str(e)}")
+        print(traceback.format_exc())
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing document: {type(e).__name__}: {str(e)}"
+            detail=f"Error processing document: {str(e)}"
         )
 
 @app.post(
@@ -202,10 +190,7 @@ async def preview_document(
     doc_service: DocumentService = Depends(get_document_service),
     settings: Settings = Depends(get_settings)
 ):
-    """
-    Preview extracted text from a document without processing it.
-    Useful for debugging PDF extraction quality.
-    """
+    """Preview extracted text and chunking from a document."""
     try:
         # Validate file type
         file_extension = Path(file.filename).suffix[1:].lower()
@@ -213,7 +198,7 @@ async def preview_document(
         if file_extension not in settings.allowed_file_types:
             raise HTTPException(
                 status_code=400,
-                detail=f"File type .{file_extension} not supported. Allowed: {settings.allowed_file_types}"
+                detail=f"File type .{file_extension} not supported"
             )
         
         file_type = FileType(file_extension)
@@ -221,20 +206,35 @@ async def preview_document(
         # Read file content
         content = await file.read()
         file_size = len(content)
-
+        
         # Save file temporarily
         file_path = await doc_service.save_file(file.filename, content)
-
+        
         print(f"Previewing file: {file.filename} ({file_size} bytes)")
-
+        
         # Extract text
-        extracted_text = doc_service.extract_text(file_path=file_path, file_type=file_type)
-
-        # Calculate some stats
+        extracted_text = doc_service.extract_text(file_path, file_type)
+        
+        # Calculate stats
         word_count = len(extracted_text.split())
         line_count = len(extracted_text.split('\n'))
-
-        # Return preview with stats
+        
+        # Create complete metadata for chunks
+        chunk_metadata = {
+            "filename": file.filename,
+            "file_type": file_type.value,        # ← Add this
+            "file_size_bytes": file_size,        # ← Add this
+            "upload_timestamp": datetime.now().isoformat()
+        }
+        
+        # Create chunks for preview
+        chunks = doc_service.create_chunks(
+            text=extracted_text,
+            document_id="preview",
+            metadata=chunk_metadata              # ← Pass complete metadata
+        )
+        
+        # Return preview with chunks
         return {
             "filename": file.filename,
             "file_type": file_type.value,
@@ -245,7 +245,27 @@ async def preview_document(
             "line_count": line_count,
             "preview_first_500": extracted_text[:500],
             "preview_last_500": extracted_text[-500:] if len(extracted_text) > 500 else "",
-            "full_text": extracted_text
+            "full_text": extracted_text,
+            "chunk_count": len(chunks),
+            "chunks": [
+                {
+                    "chunk_index": chunk.chunk_index,
+                    "chunk_id": chunk.chunk_id,
+                    "text": chunk.text,
+                    "length": len(chunk.text),
+                    "word_count": len(chunk.text.split()),
+                    "first_line": chunk.text.split('\n')[0][:100] if chunk.text else "",
+                    "start_char": chunk.start_char,   # ← Include position info
+                    "end_char": chunk.end_char,       # ← Include position info
+                }
+                for chunk in chunks
+            ],
+            "chunk_stats": {
+                "total_chunks": len(chunks),
+                "avg_chunk_size": sum(len(c.text) for c in chunks) / len(chunks) if chunks else 0,
+                "min_chunk_size": min(len(c.text) for c in chunks) if chunks else 0,
+                "max_chunk_size": max(len(c.text) for c in chunks) if chunks else 0,
+            }
         }
     
     except Exception as e:

@@ -65,55 +65,57 @@ class RAGService:
         self.total_queries = 0
 
     # Storing chunks in vector database
-    async def store_chunks(self, chunks: List[DocumentChunk]) -> int:
+    async def store_chunks(self, chunks: List[DocumentChunk]) -> None:
         """
-        Store document chunks in the vector database.
+        Store document chunks with embeddings in ChromaDB.
         
         Args:
-            chunks: List of DocumentChunk objects WITH embeddings
-            
-        Returns:
-            int: Number of chunks stored
-            
-        How it works:
-            1. Extract IDs, texts, embeddings, and metadata from chunks
-            2. Store them in ChromaDB
-            3. ChromaDB indexes the embeddings for fast similarity search
+            chunks: List of DocumentChunk objects with embeddings
         """
-
         if not chunks:
-            return 0
+            print("No chunks to store")
+            return
         
         print(f"Storing {len(chunks)} chunks in vector database...")
-
-        # Prepare data for ChromaDB
-        # ChromaDB expects separate lists for each field
-        ids = [chunk.chunk_id for chunk in chunks]
-        documents = [chunk.text for chunk in chunks]
-        embeddings = [chunk.embedding for chunk in chunks]
-
-        metadatas = [
-            {
-                "document_id": chunk.document_id,
-                "filename": chunk.metadata.filename,
-                "chunk_index": chunk.chunk_index,
-                "start_char": chunk.start_char,
-                "end_char": chunk.end_char,
-                "upload_date": chunk.metadata.upload_date.isoformat()
-            }
-            for chunk in chunks
-        ]
-
-        # Add to chromaDb
-        self.collection.add(
-            ids=ids,
-            embeddings=embeddings,
-            metadatas=metadatas,
-            documents=documents,
-        )
-
-        print(f"Stored {len(chunks)} chunks")
-        return len(chunks)
+        
+        try:
+            # Prepare data for ChromaDB
+            ids = [chunk.chunk_id for chunk in chunks]
+            documents = [chunk.text for chunk in chunks]
+            embeddings = [chunk.embedding for chunk in chunks]
+            
+            # Prepare metadatas - use dictionary access
+            metadatas = []
+            for chunk in chunks:
+                metadata = {
+                    "document_id": chunk.document_id,
+                    "chunk_index": chunk.chunk_index,
+                    "filename": chunk.metadata.get("filename", "unknown"),
+                    "file_type": chunk.metadata.get("file_type", "unknown"),
+                    "chunk_size": chunk.metadata.get("chunk_size", len(chunk.text)),
+                    "upload_timestamp": chunk.metadata.get("upload_timestamp", ""),
+                }
+                metadatas.append(metadata)
+            
+            # Validate embeddings
+            if any(emb is None for emb in embeddings):
+                raise ValueError("Some chunks are missing embeddings")
+            
+            # Add to ChromaDB collection
+            self.collection.add(
+                ids=ids,
+                documents=documents,
+                embeddings=embeddings,
+                metadatas=metadatas
+            )
+            
+            print(f"✅ Successfully stored {len(chunks)} chunks")
+            
+        except Exception as e:
+            print(f"Error storing chunks: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     # Searching for relevant chunks
     async def search_similar_chunks(
