@@ -26,6 +26,7 @@ from app.config import Settings, get_settings
 from app.services.document_services import DocumentService
 from app.services.embedding_services import EmbeddingService
 from app.services.rag_services import RAGService
+from app.services.agent_service import StudyBuddyAgent
 
 # FastAPI App
 app = FastAPI(
@@ -54,6 +55,16 @@ def get_embedding_service() -> EmbeddingService:
 
 def get_rag_service() -> RAGService:
     return RAGService()
+
+def get_agent_service(
+    settings: Settings = Depends(get_settings),
+    rag_service: RAGService = Depends(get_rag_service)
+) -> StudyBuddyAgent:
+    """Get agent service instance."""
+    return StudyBuddyAgent(
+        claude_api_key=settings.claude_api_key,
+        rag_service=rag_service
+    )
 
 # Route Handlers
 @app.post("/upload", response_model=UploadResponse)
@@ -124,6 +135,7 @@ async def upload_document(
         print(f"Stored {len(chunks_with_embeddings)} chunks in vector DB")
         
         return UploadResponse(
+            success=True, 
             message="Document uploaded successfully",
             document_id=document_id,
             filename=file.filename,
@@ -182,6 +194,48 @@ async def query(
         raise HTTPException(
             status_code=500,
             detail=f"Error processing query: {str(e)}"
+        )
+    
+@app.post("/agent/query", response_model=QueryResponse)
+async def agent_query(
+    request: QueryRequest,
+    agent: StudyBuddyAgent = Depends(get_agent_service)
+):
+    """
+    Process query using AI agent (smarter than basic RAG).
+    
+    The agent can:
+    - Handle multi-part questions
+    - Generate practice questions
+    - Perform comparisons
+    - Break down complex queries
+    """
+    import time
+    
+    start_time = time.time()
+    
+    try:
+        # Process with agent
+        result = await agent.process_query(
+            user_query=request.question,
+            conversation_history=None  # Could add conversation memory here
+        )
+        
+        query_time = time.time() - start_time
+        
+        return QueryResponse(
+            answer=result["answer"],
+            sources=result["sources"],
+            query_time_seconds=round(query_time, 2)
+        )
+    
+    except Exception as e:
+        import traceback
+        print(f"Agent error: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Agent error: {str(e)}"
         )
     
 @app.post("/preview", response_class=JSONResponse)

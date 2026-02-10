@@ -80,13 +80,32 @@ def upload_document(file):
     response = requests.post(f"{API_URL}/upload", files=files)
     return response
 
-def query_api(question, num_contexts=4):
-    """Query the API with a question."""
+# REPLACE THIS FUNCTION
+def query_api(question, num_contexts=4, use_agent_mode=False):
+    """
+    Query the API with optional agent mode.
+    
+    Args:
+        question: User's question
+        num_contexts: Number of context chunks to retrieve
+        use_agent_mode: Whether to use AI agent (smarter) or basic RAG
+        
+    Returns:
+        dict: Response with answer, sources, etc.
+    """
+    if use_agent_mode:
+        # Use agent endpoint (smarter, handles complex queries)
+        endpoint = f"{API_URL}/agent/query"
+    else:
+        # Use basic RAG endpoint (faster, simpler)
+        endpoint = f"{API_URL}/query"
+    
     payload = {
         "question": question,
         "num_contexts": num_contexts
     }
-    response = requests.post(f"{API_URL}/query", json=payload)
+    
+    response = requests.post(endpoint, json=payload)
     return response.json()
 
 def get_stats():
@@ -152,18 +171,28 @@ with st.sidebar:
     
     st.markdown("---")
     
+    # ✅ ADD AGENT TOGGLE HERE
+    st.subheader("🤖 AI Agent")
+    
+    use_agent = st.toggle(
+        "Enable Smart Agent",
+        value=False,
+        help="AI agent can handle complex questions, comparisons, and generate practice questions"
+    )
+    
+    if use_agent:
+        st.success("✨ Agent Mode: ON")
+        st.caption("Better for: comparisons, multi-part questions, practice tests")
+    else:
+        st.info("📚 Basic Mode: ON")
+        st.caption("Faster, simpler RAG search")
+    
+    st.markdown("---")
+    
     # About
     st.subheader("ℹ️ About")
     st.markdown("""
-    **Study Buddy** is an AI-powered learning assistant that helps you study by:
-    - 📤 Uploading your study materials
-    - 💬 Asking questions about your documents
-    - 🎯 Getting accurate, source-backed answers
-    
-    **Powered by:**
-    - Claude Sonnet 4
-    - ChromaDB
-    - FastAPI
+    **Study Buddy** is an AI-powered learning assistant...
     """)
 
 # ============================================================================
@@ -231,7 +260,9 @@ with tab1:
         with st.chat_message("assistant"):
             with st.spinner("🤔 Thinking..."):
                 try:
-                    response = query_api(prompt, num_contexts)
+                    # ✅ UPDATE THIS LINE - pass use_agent parameter
+                    response = query_api(prompt, num_contexts, use_agent_mode=use_agent)
+                    
                     answer = response['answer']
                     sources = response.get('sources', [])
                     query_time = response.get('query_time_seconds', 0)
@@ -259,7 +290,14 @@ with tab1:
                                 # Display chunk text
                                 if source.get('chunk_text'):
                                     with st.expander("📖 View chunk content", expanded=False):
-                                        st.markdown(source['chunk_text'])
+                                        st.text_area(
+                                            "Chunk text:",
+                                            value=source['chunk_text'],
+                                            height=200,
+                                            label_visibility="collapsed",
+                                            disabled=True,
+                                            key=f"chunk_{source['chunk_id']}_{i}"
+                                        )
                                 
                                 if i < len(sources):
                                     st.divider()
