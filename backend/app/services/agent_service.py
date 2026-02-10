@@ -75,6 +75,7 @@ class StudyBuddyAgent:
     async def process_query(
         self, 
         user_query: str,
+        num_contexts: int = 4,  # ✅ ADDED
         conversation_history: List[Dict] = None
     ) -> Dict[str, Any]:
         """
@@ -82,11 +83,15 @@ class StudyBuddyAgent:
         
         Args:
             user_query: The user's question
+            num_contexts: Number of context chunks to retrieve (default: 4)
             conversation_history: Previous messages for context
             
         Returns:
             Dict with answer, sources, and metadata
         """
+        
+        # Store for use in tools
+        self.default_num_contexts = num_contexts  # ✅ ADDED
         
         # Build conversation context
         messages = conversation_history or []
@@ -96,22 +101,30 @@ class StudyBuddyAgent:
         })
         
         # Initial agent prompt
-        system_prompt = """You are Study Buddy, an intelligent AI tutor assistant. Your job is to help students learn from their uploaded study materials.
+        system_prompt = """You are Study Buddy, a friendly and encouraging AI tutor. You help students learn from their uploaded study materials.
 
-Your capabilities:
-1. **search_documents**: Find specific information in study materials
-2. **multi_search**: Search multiple topics for comparison questions
-3. **generate_practice_questions**: Create test questions from content
+        IMPORTANT: The user has already uploaded study materials. They are available in your search tools. DO NOT ask the user to provide materials - they're already here!
 
-Guidelines:
-- For simple questions: use search_documents with a clear query
-- For "what's the difference between X and Y": use multi_search with separate queries for X and Y
-- For broad questions: break into focused sub-queries
-- For practice/test questions: use generate_practice_questions
-- Always explain your reasoning before calling tools
-- Be encouraging and educational
+        Your personality:
+        - Warm and encouraging, like a patient teacher
+        - Enthusiastic about learning
+        - Celebrates student progress
+        - Uses casual, friendly language
+        - Remembers what you discussed earlier in the conversation
 
-Analyze the user's question and decide which tool(s) to use."""
+        Available tools:
+        1. **search_documents**: Search study materials for information
+        2. **multi_search**: Compare multiple topics
+        3. **generate_practice_questions**: Create practice questions from uploaded materials
+
+        When the user says things like:
+        - "test me" / "quiz me" / "practice questions" → Use generate_practice_questions tool
+        - "explain X" / "what is X" → Use search_documents tool
+        - "compare X and Y" / "difference between X and Y" → Use multi_search tool
+
+        CRITICAL: The materials are already uploaded and ready to search. Never ask the user to provide materials.
+
+        Call the appropriate tool now to help the student."""
 
         print(f"\n🤖 Agent processing: '{user_query}'")
         
@@ -122,6 +135,7 @@ Analyze the user's question and decide which tool(s) to use."""
             temperature=0.3,
             system=system_prompt,
             tools=self.tools,
+            tool_choice={"type": "any"},
             messages=messages
         )
         
@@ -151,7 +165,7 @@ Analyze the user's question and decide which tool(s) to use."""
                 if tool_name == "search_documents":
                     result = await self._search_documents(
                         query=tool_input["query"],
-                        num_results=tool_input.get("num_results", 4)
+                        num_results=tool_input.get("num_results", None)
                     )
                     tool_results.append(result)
                     sources.extend(result["sources"])
@@ -167,13 +181,61 @@ Analyze the user's question and decide which tool(s) to use."""
                         num_questions=tool_input.get("num_questions", 5)
                     )
                     tool_results.append(result)
+                    # Practice questions tool returns sources too
+                    if "sources" in result:
+                        sources.extend(result["sources"])
         
-        # If agent used tools, get final synthesis
-        if tool_results:
-            final_answer = await self._synthesize_answer(
-                original_query=original_query,
-                tool_results=tool_results
+        # ✅ NEW: Better synthesis logic
+        if tool_results and sources:
+            # We have search results - build context from chunks
+            all_chunks = []
+            for result in tool_results:
+                if "chunks" in result:
+                    all_chunks.extend(result["chunks"])
+            
+            # Build context from chunk texts
+            context_parts = []
+            for i, chunk in enumerate(all_chunks[:8], 1):  # Use top 8 chunks
+                context_parts.append(f"[Source {i} - {chunk['filename']}]\n{chunk['text']}")
+            
+            context = "\n\n---\n\n".join(context_parts)
+            
+            # Create a proper RAG-style prompt
+            system_prompt = """You are a helpful study assistant. Answer questions based on the provided context from the user's study materials.
+
+    Guidelines:
+    - Use only information from the provided context
+    - Be clear and educational
+    - Structure your answer with headers if comparing multiple things
+    - Don't mention that you're looking at sources - just provide the answer"""
+
+            user_prompt = f"""Context from study materials:
+
+    {context}
+
+    ---
+
+    Question: {original_query}
+
+    Please provide a clear, well-structured answer based on the context above."""
+
+            # Generate final answer
+            synthesis_response = self.client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                temperature=0.3,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}]
             )
+            
+            final_answer = synthesis_response.content[0].text
+            print(f"✅ Synthesized answer from {len(all_chunks)} chunks")
+        
+        elif tool_results:
+            # For non-search tools (like practice questions)
+            final_answer = tool_results[0].get("questions", final_answer)
+        
+        # If no tools were used, final_answer already has the text response
         
         return {
             "answer": final_answer,
@@ -181,8 +243,13 @@ Analyze the user's question and decide which tool(s) to use."""
             "tool_calls": len(tool_results)
         }
     
-    async def _search_documents(self, query: str, num_results: int = 4) -> Dict:
+    async def _search_documents(self, query: str, num_results: int = None) -> Dict:
         """Search documents using RAG."""
+        
+        # Use provided num_results, or fall back to default
+        if num_results is None:
+            num_results = getattr(self, 'default_num_contexts', 4)  # ✅ ADDED
+        
         chunks = await self.rag_service.search_similar_chunks(
             query=query,
             num_results=num_results
@@ -268,30 +335,39 @@ Make questions varied (definitions, explanations, comparisons, applications)."""
         
         # Build context from all tool results
         context_parts = []
+        source_references = []  # ✅ ADD THIS
         
         for result in tool_results:
             if result["tool"] == "search_documents":
                 context_parts.append(f"Search results for '{result['query']}':")
-                for chunk in result["chunks"]:
-                    context_parts.append(f"- {chunk['text'][:200]}...")
+                for i, chunk in enumerate(result["chunks"], 1):
+                    context_parts.append(f"[Source {i}] {chunk['text']}")  # ✅ CHANGED
+                    source_references.append(f"Source {i}: {chunk['filename']}")  # ✅ ADD
             
             elif result["tool"] == "multi_search":
-                for i, query in enumerate(result["queries"]):
-                    context_parts.append(f"Results for '{query}':")
-                    # Show relevant chunks
+                context_parts.append("Comparison search results:")
+                source_num = 1
+                for query in result["queries"]:
+                    context_parts.append(f"\nFor '{query}':")
+                    # Find chunks for this query
+                    relevant_chunks = [c for c in result["chunks"] if query.lower() in c.get('text', '').lower()][:2]
+                    for chunk in relevant_chunks:
+                        context_parts.append(f"[Source {source_num}] {chunk['text'][:300]}")
+                        source_references.append(f"Source {source_num}: {chunk['filename']}")
+                        source_num += 1
             
             elif result["tool"] == "generate_practice_questions":
                 context_parts.append(result["questions"])
         
         context = "\n\n".join(context_parts)
         
-        # Final synthesis
+        # Final synthesis with source attribution
         synthesis_prompt = f"""Original question: {original_query}
 
-Information gathered:
-{context}
+    Information gathered from study materials:
+    {context}
 
-Please provide a comprehensive, clear answer to the original question based on this information. Be educational and encouraging."""
+    Please provide a comprehensive, clear answer to the original question. When stating facts, reference which source number supports that information (e.g., "According to Source 2..."). Be educational and encouraging."""
 
         response = self.client.messages.create(
             model="claude-sonnet-4-20250514",
@@ -299,4 +375,10 @@ Please provide a comprehensive, clear answer to the original question based on t
             messages=[{"role": "user", "content": synthesis_prompt}]
         )
         
-        return response.content[0].text
+        answer = response.content[0].text
+        
+        # ADD source list at the end
+        if source_references:
+            answer += "\n\n**Sources used:**\n" + "\n".join(f"- {ref}" for ref in source_references[:5])
+        
+        return answer

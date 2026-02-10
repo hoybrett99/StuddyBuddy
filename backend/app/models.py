@@ -47,6 +47,7 @@ class QueryRequest(BaseModel):
                         )
     document_ids: Optional[List[str]] = None # limit search to specific documents
     num_contexts: int = Field(default=4, ge=1, le=10)
+    conversation_history: Optional[List[Dict[str, str]]] = None
 
     @field_validator('question')
     @classmethod

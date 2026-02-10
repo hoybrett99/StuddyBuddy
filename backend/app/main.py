@@ -202,30 +202,56 @@ async def agent_query(
     agent: StudyBuddyAgent = Depends(get_agent_service)
 ):
     """
-    Process query using AI agent (smarter than basic RAG).
+    Process query using AI agent with tool usage.
     
     The agent can:
-    - Handle multi-part questions
-    - Generate practice questions
-    - Perform comparisons
-    - Break down complex queries
+    - Detect intent and choose appropriate tools
+    - Handle multi-part questions with multi_search
+    - Generate practice questions on demand
+    - Provide intelligent query processing
     """
     import time
     
     start_time = time.time()
     
     try:
-        # Process with agent
+        print(f"\n{'='*60}")
+        print(f"AGENT QUERY: {request.question}")
+        print(f"{'='*60}")
+        
+        # Process with agent (returns dict with answer, sources, tool_calls)
         result = await agent.process_query(
             user_query=request.question,
-            conversation_history=None  # Could add conversation memory here
+            num_contexts=request.num_contexts,  # ✅ Pass num_contexts
+            conversation_history=None  # Future: add conversation memory
         )
         
         query_time = time.time() - start_time
         
+        # Extract data from result dict
+        answer = result["answer"]
+        sources_data = result["sources"]
+        tool_calls = result.get("tool_calls", 0)
+        
+        # Convert source dicts to Source objects
+        from app.models import Source
+        sources = [
+            Source(
+                document_name=s.get("document_name", "unknown"),
+                chunk_id=s.get("chunk_id", ""),
+                relevance_score=s.get("relevance_score", 0.0),
+                chunk_text=s.get("chunk_text", "")
+            )
+            for s in sources_data
+        ]
+        
+        print(f"Agent query completed in {query_time:.2f}s")
+        print(f"Tool calls: {tool_calls}")
+        print(f"Sources: {len(sources)}")
+        
         return QueryResponse(
-            answer=result["answer"],
-            sources=result["sources"],
+            answer=answer,
+            sources=sources,
             query_time_seconds=round(query_time, 2)
         )
     

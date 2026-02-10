@@ -123,18 +123,24 @@ class EmbeddingService:
         if not chunks:
             return []
         
-        # Extract just the text from each chunk
-        texts = [chunk.text for chunk in chunks]
-
-        # Generate embeddings for all chunks
-        embeddings = self.embed_texts(texts)
-
-        # Add embeddings back to chunks as part of the metadata
-        for chunk, embedding in zip(chunks, embeddings):
-            chunk.embedding = embedding
-
-        print(f"Generated {len(embeddings)} embeddings")
+        print(f"Generating embeddings for {len(chunks)} chunks...")
+    
+        batch_size = 50
+        total_batches = (len(chunks) + batch_size - 1) // batch_size
         
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
+            batch_num = (i // batch_size) + 1
+            
+            print(f"Batch {batch_num}/{total_batches} ({len(batch)} chunks)...")
+            
+            texts = [chunk.text for chunk in batch]
+            embeddings = self.model.encode(texts, show_progress_bar=False)
+            
+            for chunk, embedding in zip(batch, embeddings):
+                chunk.embedding = embedding.tolist()
+        
+        print(f"All embeddings generated!")
         return chunks
     
     # Calculate similarity between two texts

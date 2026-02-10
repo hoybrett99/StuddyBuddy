@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 import time
 import pandas as pd
-from datetime import datetime
+import re
 
 # ============================================================================
 # Configuration
@@ -52,6 +52,11 @@ st.markdown("""
         border-radius: 10px;
         text-align: center;
     }
+    
+    /* Conversation starter buttons */
+    .stButton button {
+        text-align: left;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -61,6 +66,10 @@ st.markdown("""
 
 if 'messages' not in st.session_state:
     st.session_state.messages = []
+
+# Agent conversation history for conversational memory
+if 'agent_conversation' not in st.session_state:
+    st.session_state.agent_conversation = []
 
 # ============================================================================
 # Helper Functions
@@ -80,29 +89,28 @@ def upload_document(file):
     response = requests.post(f"{API_URL}/upload", files=files)
     return response
 
-# REPLACE THIS FUNCTION
-def query_api(question, num_contexts=4, use_agent_mode=False):
+def query_api(question, num_contexts=4, use_agent_mode=False, conversation_history=None):
     """
-    Query the API with optional agent mode.
+    Query the API with optional agent mode and conversation history.
     
     Args:
         question: User's question
         num_contexts: Number of context chunks to retrieve
         use_agent_mode: Whether to use AI agent (smarter) or basic RAG
+        conversation_history: Previous conversation for context (agent mode only)
         
     Returns:
         dict: Response with answer, sources, etc.
     """
     if use_agent_mode:
-        # Use agent endpoint (smarter, handles complex queries)
         endpoint = f"{API_URL}/agent/query"
     else:
-        # Use basic RAG endpoint (faster, simpler)
         endpoint = f"{API_URL}/query"
     
     payload = {
         "question": question,
-        "num_contexts": num_contexts
+        "num_contexts": num_contexts,
+        "conversation_history": conversation_history if use_agent_mode else None
     }
     
     response = requests.post(endpoint, json=payload)
@@ -171,18 +179,28 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # ✅ ADD AGENT TOGGLE HERE
+    # AI Agent Toggle
     st.subheader("🤖 AI Agent")
     
     use_agent = st.toggle(
         "Enable Smart Agent",
-        value=False,
-        help="AI agent can handle complex questions, comparisons, and generate practice questions"
+        value=True,
+        help="AI agent can handle complex questions, comparisons, practice questions, and remembers conversation context"
     )
     
     if use_agent:
         st.success("✨ Agent Mode: ON")
-        st.caption("Better for: comparisons, multi-part questions, practice tests")
+        st.caption("✓ Conversational memory")
+        st.caption("✓ Smart comparisons")
+        st.caption("✓ Practice questions")
+        
+        # Show conversation stats
+        if len(st.session_state.agent_conversation) > 0:
+            turns = len(st.session_state.agent_conversation) // 2
+            st.metric("Conversation turns", turns)
+            
+            if turns > 3:
+                st.info("💡 Tip: Clear chat when switching topics for better focus!")
     else:
         st.info("📚 Basic Mode: ON")
         st.caption("Faster, simpler RAG search")
@@ -192,7 +210,16 @@ with st.sidebar:
     # About
     st.subheader("ℹ️ About")
     st.markdown("""
-    **Study Buddy** is an AI-powered learning assistant...
+    **Study Buddy** is an AI-powered learning assistant that helps you study more effectively.
+    
+    **Features:**
+    - 💬 Conversational Q&A
+    - 📚 Document upload (PDF, TXT, DOCX)
+    - 🔍 Smart search with citations
+    - 🤖 AI agent for complex queries
+    - 📝 Practice question generation
+    
+    Built with Claude, FastAPI, and ChromaDB.
     """)
 
 # ============================================================================
@@ -200,7 +227,7 @@ with st.sidebar:
 # ============================================================================
 
 st.title("📚 Study Buddy - AI Learning Assistant")
-st.markdown("Upload your study materials and ask questions to get AI-powered answers with source citations.")
+st.markdown("Upload your study materials and have natural conversations about what you're learning!")
 
 # ============================================================================
 # Tabs
@@ -213,10 +240,52 @@ tab1, tab2, tab3, tab4 = st.tabs(["💬 Chat", "📤 Upload", "📖 Library", "�
 # ============================================================================
 
 with tab1:
-    st.markdown("### Ask questions about your study materials")
+    st.markdown("### 💬 Chat with Study Buddy")
+    
+    # Show conversation starters if chat is empty
+    if not st.session_state.messages:
+        st.markdown("**👋 Hi! I'm Study Buddy, your AI learning assistant.**")
+        st.markdown("Ask me anything about your uploaded study materials. I can help you:")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("**📖 Learn**")
+            st.markdown("- Explain concepts")
+            st.markdown("- Define terms")
+            st.markdown("- Clarify confusion")
+        
+        with col2:
+            st.markdown("**🔍 Compare**")
+            st.markdown("- Find differences")
+            st.markdown("- Identify similarities")
+            st.markdown("- Contrast topics")
+        
+        with col3:
+            st.markdown("**✏️ Practice**")
+            st.markdown("- Generate quizzes")
+            st.markdown("- Test knowledge")
+            st.markdown("- Review material")
+        
+        st.markdown("---")
+        
+        st.markdown("**💡 Try these conversation starters:**")
+        
+        starter_col1, starter_col2 = st.columns(2)
+        
+        with starter_col1:
+            st.button("📝 What are mitochondria?", key="starter_1", disabled=True, use_container_width=True)
+            st.button("🔬 Explain photosynthesis simply", key="starter_2", disabled=True, use_container_width=True)
+        
+        with starter_col2:
+            st.button("🆚 Compare plant and animal cells", key="starter_3", disabled=True, use_container_width=True)
+            st.button("📚 Quiz me on cell organelles", key="starter_4", disabled=True, use_container_width=True)
+        
+        st.markdown("---")
+        st.info("💡 **Tip:** If using Agent Mode, I'll remember our conversation! You can ask follow-up questions like 'tell me more' or 'what about chloroplasts?'")
     
     # Display chat messages
-    for message in st.session_state.messages:
+    for msg_idx, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             
@@ -242,7 +311,14 @@ with tab1:
                             # Display chunk text if available
                             if source.get('chunk_text'):
                                 with st.expander("📖 View chunk content", expanded=False):
-                                    st.markdown(source['chunk_text'])
+                                    st.text_area(
+                                        "Chunk text:",
+                                        value=source['chunk_text'],
+                                        height=200,
+                                        label_visibility="collapsed",
+                                        disabled=True,
+                                        key=f"chunk_msg{msg_idx}_src{i}_{source['chunk_id'][:8]}"
+                                    )
                             
                             # Add divider between sources
                             if i < len(message["sources"]):
@@ -253,6 +329,13 @@ with tab1:
         # Add user message to chat
         st.session_state.messages.append({"role": "user", "content": prompt})
         
+        # Track in agent conversation history if agent mode is on
+        if use_agent:
+            st.session_state.agent_conversation.append({
+                "role": "user",
+                "content": prompt
+            })
+        
         with st.chat_message("user"):
             st.markdown(prompt)
         
@@ -260,15 +343,33 @@ with tab1:
         with st.chat_message("assistant"):
             with st.spinner("🤔 Thinking..."):
                 try:
-                    # ✅ UPDATE THIS LINE - pass use_agent parameter
-                    response = query_api(prompt, num_contexts, use_agent_mode=use_agent)
+                    # Prepare conversation history for agent
+                    conv_history = None
+                    if use_agent and len(st.session_state.agent_conversation) > 1:
+                        # Send conversation history (exclude current message)
+                        conv_history = st.session_state.agent_conversation[:-1]
+                    
+                    # Call API with conversation history
+                    response = query_api(
+                        prompt, 
+                        num_contexts, 
+                        use_agent_mode=use_agent,
+                        conversation_history=conv_history
+                    )
                     
                     answer = response['answer']
                     sources = response.get('sources', [])
                     query_time = response.get('query_time_seconds', 0)
                     
                     st.markdown(answer)
-                    st.caption(f"⏱️ Answered in {query_time:.2f}s")
+                    
+                    # Show query time and conversation indicator
+                    time_col1, time_col2 = st.columns([1, 3])
+                    with time_col1:
+                        st.caption(f"⏱️ {query_time:.2f}s")
+                    with time_col2:
+                        if use_agent and conv_history:
+                            st.caption(f"💬 Using {len(conv_history)//2} previous turns for context")
                     
                     # Display sources
                     if sources:
@@ -308,6 +409,13 @@ with tab1:
                         "content": answer,
                         "sources": sources
                     })
+                    
+                    # Track assistant response in agent conversation
+                    if use_agent:
+                        st.session_state.agent_conversation.append({
+                            "role": "assistant",
+                            "content": answer
+                        })
                 
                 except Exception as e:
                     error_msg = f"❌ Error: {str(e)}"
@@ -319,9 +427,26 @@ with tab1:
     
     # Clear chat button
     if st.session_state.messages:
-        if st.button("🗑️ Clear Chat History"):
-            st.session_state.messages = []
-            st.rerun()
+        st.markdown("---")
+        
+        clear_col1, clear_col2, clear_col3 = st.columns([2, 1, 1])
+        
+        with clear_col1:
+            if use_agent and len(st.session_state.agent_conversation) > 0:
+                turns = len(st.session_state.agent_conversation) // 2
+                st.caption(f"💬 Conversation: {turns} turn{'s' if turns != 1 else ''}")
+        
+        with clear_col2:
+            if st.button("🔄 New Topic", use_container_width=True, help="Start fresh conversation on a new topic"):
+                if use_agent:
+                    st.session_state.agent_conversation = []
+                st.success("✓ Conversation reset! Agent will treat next question as new topic.")
+        
+        with clear_col3:
+            if st.button("🗑️ Clear All", use_container_width=True, help="Clear entire chat history"):
+                st.session_state.messages = []
+                st.session_state.agent_conversation = []
+                st.rerun()
 
 # ============================================================================
 # TAB 2: Upload Documents
@@ -347,34 +472,58 @@ with tab2:
             st.write(f"**📋 Type:** {uploaded_file.type}")
             
             if st.button("📤 Upload and Process", type="primary", use_container_width=True):
-                with st.spinner("Processing document..."):
-                    try:
-                        # Reset file pointer
-                        uploaded_file.seek(0)
-                        
-                        # Upload file
-                        response = upload_document(uploaded_file)
-                        
-                        if response.status_code == 200:
-                            result = response.json()
-                            st.success("✅ Document uploaded successfully!")
-                            
-                            # Display results
-                            col_a, col_b, col_c = st.columns(3)
-                            with col_a:
-                                st.metric("Document ID", result['document_id'][:8] + "...")
-                            with col_b:
-                                st.metric("Chunks Created", result['chunks_created'])
-                            with col_c:
-                                st.metric("Status", "✓ Ready")
-                            
-                            st.info("💡 You can now ask questions about this document in the Chat tab!")
-                        else:
-                            error_detail = response.json().get('detail', 'Unknown error')
-                            st.error(f"❌ Upload failed: {error_detail}")
+                # Create progress indicators
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                try:
+                    # Upload file
+                    status_text.text("⬆️ Uploading file...")
+                    progress_bar.progress(10)
+                    uploaded_file.seek(0)
                     
-                    except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
+                    status_text.text("📄 Extracting text (this may take 30-90 seconds for large PDFs)...")
+                    progress_bar.progress(20)
+                    
+                    # Estimate time based on file size
+                    size_mb = uploaded_file.size / (1024 * 1024)
+                    if size_mb > 20:
+                        status_text.warning(f"⏳ Large file ({size_mb:.1f}MB) - processing may take 2-5 minutes...")
+                    
+                    # Make request
+                    response = upload_document(uploaded_file)
+                    
+                    progress_bar.progress(50)
+                    status_text.text("🧠 Generating embeddings...")
+                    
+                    # Wait for response
+                    if response.status_code == 200:
+                        progress_bar.progress(100)
+                        status_text.text("✅ Complete!")
+                        
+                        result = response.json()
+                        st.success("✅ Document uploaded successfully!")
+                        
+                        # Display results
+                        col_a, col_b, col_c = st.columns(3)
+                        with col_a:
+                            st.metric("Document ID", result['document_id'][:8] + "...")
+                        with col_b:
+                            st.metric("Chunks Created", result['chunks_created'])
+                        with col_c:
+                            st.metric("Status", "✓ Ready")
+                        
+                        st.info("💡 You can now ask questions about this document in the Chat tab!")
+                    else:
+                        progress_bar.empty()
+                        status_text.empty()
+                        error_detail = response.json().get('detail', 'Unknown error')
+                        st.error(f"❌ Upload failed: {error_detail}")
+                
+                except Exception as e:
+                    progress_bar.empty()
+                    status_text.empty()
+                    st.error(f"❌ Error: {str(e)}")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -390,6 +539,11 @@ with tab2:
         - Max file size: 50MB
         - Clear, readable text works best
         - Multiple uploads are supported
+        
+        ### 🚀 After Upload
+        - Documents are automatically chunked
+        - Embeddings are generated
+        - Ready for instant querying
         """)
 
 # ============================================================================
@@ -426,6 +580,11 @@ with tab3:
             
             st.markdown("---")
             st.info("📚 All your uploaded documents are stored and ready for querying!")
+            
+            # Show average chunks per document
+            if total_docs > 0:
+                avg_chunks = total_chunks / total_docs
+                st.caption(f"📊 Average chunks per document: {avg_chunks:.1f}")
         else:
             st.info("📭 No documents uploaded yet. Go to the Upload tab to add your first document!")
     else:
@@ -506,8 +665,6 @@ with tab4:
                         quality_issues = []
                         text = result['full_text']
                         
-                        import re
-                        
                         # Check for common OCR issues
                         single_letters = len([w for w in text.split() if len(w) == 1 and w.isupper() and w not in ['A', 'I']])
                         if single_letters > 50:
@@ -583,7 +740,7 @@ with tab4:
                                         height=200,
                                         label_visibility="collapsed",
                                         disabled=True,
-                                        key=f"chunk_{chunk['chunk_id']}"
+                                        key=f"preview_chunk_{chunk['chunk_id']}"
                                     )
                                     
                                     # Show where chunk starts
@@ -664,7 +821,6 @@ with tab4:
                                     "First Line": chunk['first_line'][:50] + "..." if len(chunk['first_line']) > 50 else chunk['first_line']
                                 })
                             
-                            import pandas as pd
                             df = pd.DataFrame(chunk_data)
                             st.dataframe(df, use_container_width=True, hide_index=True)
                             

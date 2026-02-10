@@ -70,6 +70,8 @@ class DocumentService:
         Raises:
             ValueError: If file type not supported
         """
+        print(f"Extracting text from {file_type.value.upper()} file...")
+        
         if file_type == FileType.PDF:
             return self._extract_pdf(file_path)
         elif file_type == FileType.TXT:
@@ -78,102 +80,167 @@ class DocumentService:
             return self._extract_docx(file_path)
         else:
             raise ValueError(f"Unsupported file type: {file_type}")
-        
+
     def _clean_text(self, text: str) -> str:
         """
-        Clean OCR artifacts and formatting issues from extracted text.
+        Minimal text cleaning - only fixes obvious OCR errors.
         
         Args:
             text: Raw extracted text
             
         Returns:
-            str: Cleaned text
+            str: Lightly cleaned text
         """
-        # Remove single letters followed by space (common OCR error)
-        text = re.sub(r'\b([A-Z])\s+', '', text)
-        
-        # Replace multiple spaces with single space
-        text = re.sub(r'\s+', ' ', text)
-        
-        # Remove standalone capital letters that aren't 'A' or 'I'
-        text = re.sub(r'\s+[B-HJ-Z]\s+', ' ', text)
-        
-        # Fix common character substitutions
+        # Fix smart quotes and dashes
         replacements = {
-            'K': '',       # Remove stray K's
-            'H ': ' ',     # Remove H followed by space
-            'O ': 'o ',    # Fix capital O to lowercase o
-            '—': '-',      # Fix em-dashes
-            "'": "'",      # Fix smart quotes
-            '"': '"',      # Fix smart quotes
+            ''': "'",
+            ''': "'",
             '"': '"',
+            '"': '"',
+            '—': '-',
+            '–': '-',
+            '…': '...',
         }
         
         for old, new in replacements.items():
             text = text.replace(old, new)
         
-        # Remove extra whitespace
-        text = ' '.join(text.split())
+        # Replace multiple spaces with single space (but preserve newlines)
+        text = re.sub(r' +', ' ', text)
         
-        return text
+        # Replace more than 3 newlines with 2 newlines
+        text = re.sub(r'\n{4,}', '\n\n\n', text)
         
+        # Remove trailing/leading whitespace from each line
+        lines = [line.strip() for line in text.split('\n')]
+        text = '\n'.join(lines)
+        
+        return text.strip()
+
     def _extract_pdf(self, file_path: Path) -> str:
         """
-        Extract text from PDF using multiple methods.
+        Extract text from PDF - optimized for large files.
         
         Tries:
         1. pdfplumber (best for digital PDFs)
         2. pypdf (fallback)
-        3. OCR (for scanned PDFs)
         
         Returns the cleanest result.
         """
+        import time
+        start_time = time.time()
+        
+        file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        print(f"PDF size: {file_size_mb:.1f}MB")
+        
         results = []
         
-        # Method 1: pdfplumber
+        # Method 1: pdfplumber (slower but better quality)
         try:
             import pdfplumber
+            print("Using pdfplumber for PDF extraction")
+            
             text_parts = []
             with pdfplumber.open(file_path) as pdf:
-                for page in pdf.pages:
+                total_pages = len(pdf.pages)
+                print(f"Processing {total_pages} pages...")
+                
+                for i, page in enumerate(pdf.pages, 1):
+                    # Progress indicator for large files
+                    if i % 50 == 0 or i == total_pages:
+                        elapsed = time.time() - start_time
+                        print(f"  Page {i}/{total_pages} ({elapsed:.1f}s elapsed)")
+                    
                     text = page.extract_text()
                     if text:
                         text_parts.append(text)
+            
             text = "\n\n".join(text_parts)
+            
             if text:
-                results.append(('pdfplumber', self._clean_text(text)))
-        except Exception as e:
-            print(f"pdfplumber failed: {e}")
+                cleaned = self._clean_text(text)
+                results.append(('pdfplumber', cleaned))
+                print(f"✓ Extracted {len(cleaned):,} characters in {time.time() - start_time:.1f}s")
         
-        # Method 2: pypdf
-        try:
-            from pypdf import PdfReader
-            reader = PdfReader(file_path)
-            text_parts = [page.extract_text() for page in reader.pages if page.extract_text()]
-            text = "\n\n".join(text_parts)
-            if text:
-                results.append(('pypdf', self._clean_text(text)))
         except Exception as e:
-            print(f"pypdf failed: {e}")
+            print(f"⚠️ pdfplumber failed: {e}")
         
-        # Choose the best result (longest clean text)
+        # Method 2: pypdf (faster, lower quality)
+        if not results:
+            try:
+                from pypdf import PdfReader
+                print("Trying pypdf as fallback...")
+                
+                reader = PdfReader(file_path)
+                total_pages = len(reader.pages)
+                print(f"Processing {total_pages} pages...")
+                
+                text_parts = []
+                for i, page in enumerate(reader.pages, 1):
+                    if i % 50 == 0 or i == total_pages:
+                        print(f"  Page {i}/{total_pages}")
+                    
+                    text = page.extract_text()
+                    if text:
+                        text_parts.append(text)
+                
+                text = "\n\n".join(text_parts)
+                
+                if text:
+                    cleaned = self._clean_text(text)
+                    results.append(('pypdf', cleaned))
+                    print(f"Extracted {len(cleaned):,} characters in {time.time() - start_time:.1f}s")
+            
+            except Exception as e:
+                print(f"pypdf failed: {e}")
+        
+        # Return best result
         if results:
             best = max(results, key=lambda x: len(x[1]))
-            print(f"Using {best[0]} for PDF extraction")
             return best[1]
         else:
-            raise ValueError("Could not extract text from PDF")
-    
+            raise ValueError("Could not extract text from PDF with any method")
+
     def _extract_txt(self, file_path: Path) -> str:
-         """Extract text from txt files"""
-         with open (file_path, 'r', encoding='utf-8') as f:
-              return f.read()
-         
+        """Extract text from TXT file."""
+        encodings = ['utf-8', 'latin-1', 'cp1252']
+        
+        for encoding in encodings:
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    text = f.read()
+                print(f"Read TXT file with {encoding} encoding")
+                return self._clean_text(text)
+            except UnicodeDecodeError:
+                continue
+        
+        raise ValueError("Could not decode TXT file with any encoding")
+
     def _extract_docx(self, file_path: Path) -> str:
         """Extract text from DOCX file."""
-        from docx import Document
-        doc = Document(file_path)
-        return "\n\n".join([para.text for para in doc.paragraphs])
+        try:
+            import docx
+            doc = docx.Document(file_path)
+            
+            text_parts = []
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    text_parts.append(paragraph.text)
+            
+            # Also extract from tables
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        if cell.text.strip():
+                            text_parts.append(cell.text)
+            
+            text = "\n\n".join(text_parts)
+            print(f"Extracted {len(text):,} characters from DOCX")
+            
+            return self._clean_text(text)
+        
+        except Exception as e:
+            raise ValueError(f"Could not extract text from DOCX: {str(e)}")
         
     def create_chunks(
         self,
